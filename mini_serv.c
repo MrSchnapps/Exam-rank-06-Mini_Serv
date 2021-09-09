@@ -1,15 +1,11 @@
 #include <stdio.h>
 #include <unistd.h>
-#include <string.h>
 #include <stdlib.h>
-#include <sys/socket.h>
+#include <string.h>
 #include <sys/types.h>
-#include <sys/select.h>
-#include <arpa/inet.h>
 #include <netinet/in.h>
-#include <fcntl.h>
-
-# define BUFFER_SIZE 10
+#include <sys/socket.h>
+#include <sys/select.h>
 
 typedef struct s_clt
 {
@@ -26,15 +22,27 @@ typedef struct s_serv
 	t_clt *clients;
 }	t_serv;
 
-void	fatal(t_serv *serv)
+void fatal(t_serv *serv)
 {
-	write (2, "Fatal Error\n", strlen("Fatal Error\n"));
+	write(2, "Fatal error\n", 12);
 	if (serv->sockfd > 0)
 		close(serv->sockfd);
+	if (serv->clients)
+	{
+		t_clt *tmp = serv->clients;
+		while (serv->clients)
+		{
+			close(serv->clients->fd);
+			tmp = serv->clients->next;
+			free(serv->clients->buffer);
+			free(serv->clients);
+			serv->clients = tmp;
+		}
+	}
 	exit (1);
 }
 
-int get_max_fd(t_serv *serv)
+int get_fd_max(t_serv *serv)
 {
 	t_clt *tmp = serv->clients;
 	int max = serv->sockfd;
@@ -48,18 +56,18 @@ int get_max_fd(t_serv *serv)
 	return (max);
 }
 
-t_clt *add_client(t_serv *serv, int new_clt_fd, fd_set *set)
+t_clt *add_client(t_serv *serv, int fd, fd_set *set)
 {
 	t_clt *tmp = serv->clients;
 	t_clt *new;
 
 	if (!(new = (t_clt *)malloc(sizeof(t_clt))))
 		fatal(serv);
-	new->fd = new_clt_fd;
 	new->id = serv->total++;
+	new->fd = fd;
 	new->buffer = NULL;
 	new->next = NULL;
-	if (!tmp)
+	if (!serv->clients)
 		serv->clients = new;
 	else
 	{
@@ -83,7 +91,7 @@ void	send_all(t_serv *serv, char *content, int fd, fd_set *writes)
 	}
 }
 
-t_clt *remove_client(t_serv *serv, t_clt *to_remove)
+t_clt *remove_clt(t_serv *serv, t_clt *to_remove)
 {
 	t_clt *tmp = serv->clients;
 
@@ -91,13 +99,13 @@ t_clt *remove_client(t_serv *serv, t_clt *to_remove)
 		return (NULL);
 	if (tmp == to_remove)
 	{
+		serv->clients = to_remove->next;
 		free(tmp->buffer);
-		serv->clients = tmp->next;
 		free(tmp);
 		tmp = serv->clients;
 		return (tmp);
 	}
-	while (tmp->next != to_remove && tmp->next)
+	while (tmp && tmp->next != to_remove)
 		tmp = tmp->next;
 	tmp->next = to_remove->next;
 	free(to_remove->buffer);
@@ -107,14 +115,12 @@ t_clt *remove_client(t_serv *serv, t_clt *to_remove)
 
 char *str_join(char *s1, char *s2, int code)
 {
-	int len1;
-	int len2;
+	size_t len1 = 0;
+	size_t len2 = strlen(s2);
 	char *new;
 
-	len1 = 0;
 	if (s1)
 		len1 = strlen(s1);
-	len2 = strlen(s2);
 	if (!(new = (char *)malloc(len1 + len2 + 1)))
 		return (NULL);
 	if (s1)
@@ -124,26 +130,26 @@ char *str_join(char *s1, char *s2, int code)
 	if (code == 1 && s1)
 		free(s1);
 	return (new);
-
 }
 
-void	parsing(t_serv *serv, t_clt *curr_clt, fd_set *writes, char *str, int len)
+void	parsing(t_serv *serv, t_clt *curr_clt, fd_set *writes, char *content)
 {
-	size_t i = 0;
-	size_t j = 0;
-	char buff[BUFFER_SIZE];
+	int i = 0;
+	int j = 0;
+	char buff[65535];
 	char buff2[100];
 	char *to_send = NULL;
 
 	bzero(&buff, sizeof(buff));
 	bzero(&buff2, sizeof(buff2));
-	while (str[i])
+
+	while (content[i])
 	{
-		buff[j] = str[i];
+		buff[j] = content[i];
 		j++;
-		if (str[i] == '\n')
+		if (content[i] == '\n')
 		{
-			sprintf(buff2, "client %d: ", curr_clt->id);
+			sprintf(buff2, "client %d : ", curr_clt->id);
 			if (curr_clt->buffer)
 			{
 				if (!(to_send = str_join(buff2, curr_clt->buffer, 0)))
@@ -151,7 +157,7 @@ void	parsing(t_serv *serv, t_clt *curr_clt, fd_set *writes, char *str, int len)
 				if (!(to_send = str_join(to_send, buff, 1)))
 					fatal(serv);
 				free(curr_clt->buffer);
-				curr_clt->buffer = 0;
+				curr_clt->buffer = NULL;
 			}
 			else
 			{
@@ -176,88 +182,87 @@ void	parsing(t_serv *serv, t_clt *curr_clt, fd_set *writes, char *str, int len)
 
 int main(int argc, char **argv)
 {
-	//int sockfd;
 	if (argc != 2)
 	{
-		write (STDERR_FILENO, "Wrong number of arguments\n", strlen("Wrong number of arguments\n"));
-		exit(1);
+		write (2, "Wrong numbers of arguments\n", 27);
+		exit (1);
 	}
+	
+	t_serv serv;
+	serv.total = 0;
+	serv.sockfd = 0;
+	serv.clients = NULL;
+
 	struct sockaddr_in servaddr;
-
-	t_serv server;
-	server.sockfd = 0;
-	server.total = 0;
-	server.clients = NULL;
-
 	bzero(&servaddr, sizeof(servaddr)); 
 	servaddr.sin_family = AF_INET; 
 	servaddr.sin_addr.s_addr = htonl(2130706433); //127.0.0.1
 	servaddr.sin_port = htons(atoi(argv[1]));
 
-	server.sockfd = socket(AF_INET, SOCK_STREAM, 0); 
-	if (server.sockfd == -1)
-		fatal(&server);
-	if ((bind(server.sockfd, (const struct sockaddr *)&servaddr, sizeof(servaddr))) != 0)
-		fatal(&server);
-	if (listen(server.sockfd, 10) != 0)
-		fatal(&server);
-
+	serv.sockfd = socket(AF_INET, SOCK_STREAM, 0); 
+	if (serv.sockfd == -1)
+		fatal(&serv);
+	if ((bind(serv.sockfd, (const struct sockaddr *)&servaddr, sizeof(servaddr))) != 0)
+		fatal(&serv);
+	if (listen(serv.sockfd, 10) != 0)
+		fatal(&serv);
 
 	fd_set reads;
 	fd_set writes;
 	fd_set curr_sock;
+	char buffer[65535];
+	char recv_buffer[65535];
+	FD_ZERO(&reads);
+	FD_ZERO(&writes);
 	FD_ZERO(&curr_sock);
-	FD_SET(server.sockfd, &curr_sock);
-	char buffer[100];
-	char recv_buffer[BUFFER_SIZE];
+	FD_SET(serv.sockfd, &curr_sock);
 
-	while (1)
+	while (19)
 	{
 		reads = writes = curr_sock;
-		int activity = select(get_max_fd(&server) + 1, &reads, &writes, NULL, NULL);
+
+		int activity = select(get_fd_max(&serv) + 1, &reads, &writes, NULL, NULL);
 		if (activity < 0)
-			fatal(&server);
+			fatal(&serv);
 		else if (activity > 0)
 		{
-			if (FD_ISSET(server.sockfd, &reads)) //new clt
+			if (FD_ISSET(serv.sockfd, &reads))
 			{
-				int new_clt_fd = accept(server.sockfd, NULL, NULL);
-				if (new_clt_fd >= 0)
+				int new_clt_fd = accept(serv.sockfd, NULL, NULL);
+				if (new_clt_fd > 0)
 				{
-					t_clt *new_clt = add_client(&server, new_clt_fd, &curr_sock);
+					t_clt *new_clt = add_client(&serv, new_clt_fd, &curr_sock);
 					bzero(&buffer, sizeof(buffer));
 					sprintf(buffer, "server: client %d just arrived\n", new_clt->id);
-					send_all(&server, buffer, new_clt_fd, &writes);
+					send_all(&serv, buffer, new_clt_fd, &writes);
 					continue ;
 				}
 			}
-			
-			t_clt *tmp = server.clients;
+
+			t_clt *tmp = serv.clients;
 			while (tmp)
 			{
 				if (FD_ISSET(tmp->fd, &reads))
 				{
-					ssize_t received = recv(tmp->fd, recv_buffer, BUFFER_SIZE - 1, MSG_DONTWAIT);
-					if (received == 0) //clt disconnected*
+					//bzero(&recv_buffer, sizeof(recv_buffer));
+					ssize_t received = recv(tmp->fd, recv_buffer, 65535 - 1, MSG_DONTWAIT);
+					if (received == 0)
 					{
 						bzero(&buffer, sizeof(buffer));
-						sprintf(buffer, "server: client %d just left.\n", tmp->id);
-						send_all(&server, buffer, tmp->fd, &writes);
-						FD_CLR(tmp->fd, &curr_sock);
-						close(tmp->fd);
-						tmp = remove_client(&server, tmp);
+						sprintf(buffer, "server: client %d just left\n", tmp->id);
+						send_all(&serv, buffer, tmp->fd, &writes);
+						tmp = remove_clt(&serv, tmp);
 						continue ;
 					}
 					else if (received > 0)
 					{
 						recv_buffer[received] = 0;
-						parsing(&server, tmp, &writes, recv_buffer, received);
+						parsing(&serv, tmp, &writes, recv_buffer);
 					}
 				}
 				tmp = tmp->next;
 			}
 		}
-
 	}
-	exit(0);
+	exit (0);
 }
