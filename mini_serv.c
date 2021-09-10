@@ -3,9 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
-#include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/select.h>
+#include <netinet/in.h>
 
 typedef struct s_clt
 {
@@ -124,8 +124,8 @@ char *str_join(char *s1, char *s2, int code)
 	if (!(new = (char *)malloc(len1 + len2 + 1)))
 		return (NULL);
 	if (s1)
-		memcpy(new, s1, len1);
-	memcpy(new + len1, s2, len2);
+		strcpy(new, s1);
+	strcpy(new + len1, s2);
 	new[len1 + len2] = 0;
 	if (code == 1 && s1)
 		free(s1);
@@ -137,7 +137,7 @@ void	parsing(t_serv *serv, t_clt *curr_clt, fd_set *writes, char *content)
 	int i = 0;
 	int j = 0;
 	char buff[65535];
-	char buff2[100];
+	char buff2[200];
 	char *to_send = NULL;
 
 	bzero(&buff, sizeof(buff));
@@ -210,12 +210,11 @@ int main(int argc, char **argv)
 	fd_set reads;
 	fd_set writes;
 	fd_set curr_sock;
-	char buffer[65535];
-	char recv_buffer[65535];
-	FD_ZERO(&reads);
-	FD_ZERO(&writes);
 	FD_ZERO(&curr_sock);
 	FD_SET(serv.sockfd, &curr_sock);
+
+	char buffer[200];
+	char recv_buffer[65535];
 
 	while (19)
 	{
@@ -244,7 +243,7 @@ int main(int argc, char **argv)
 			{
 				if (FD_ISSET(tmp->fd, &reads))
 				{
-					//bzero(&recv_buffer, sizeof(recv_buffer));
+					bzero(&recv_buffer, sizeof(recv_buffer));
 					ssize_t received = recv(tmp->fd, recv_buffer, 65535 - 1, MSG_DONTWAIT);
 					if (received == 0)
 					{
